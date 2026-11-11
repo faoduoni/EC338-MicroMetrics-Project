@@ -1,0 +1,354 @@
+## Testing
+## Testing from VSCode
+## Testing from R studio 
+
+rm(list = ls())
+
+library(readr)
+library(dplyr)
+library(purrr)
+
+files <- c("2002" = "data/HBSC2001OAed1.0_F4.csv",
+           "2006" = "data/HBSC2006OAed1.0_F1.csv",
+           "2010" = "data/HBSC2010OAed1.0_F4.csv",
+           "2014" = "data/HBSC2014OAed2.0.csv")
+
+
+############Narrowing DataSet to include the variables we want######### 
+
+keep <- c(
+  # design / identifiers
+  "countryno", "schoolno", "classno",                                  #Key Identifiers for each variable
+  "sex", "age", "agecat",                                              #Controls Needed
+  "famcar", "bedroom", "holidays", "computers",                        #Will be a Family Affluence Scale from this
+  "occupsesfa", "occupsesmo",                                          #Parental occupation
+  "brothershome1", "sistershome1",                                     # Main Treatment
+  "motherhome1", "fatherhome1", "stepmohome1", "stepfahome1",          #Family structure could be used for balance tests?
+  "feellow", "irritable", "nervous", "sleepdifficulty", "lifesat",     #Main OUTCOME variables --> Will build index from
+  "beenbullied", "studaccept", "talkmother", "talkfather"              #Other potential outcomes of treatments
+)
+
+# 2014 uses different names for some variables: new name = "2014 name"
+rename_2014 <- c(classno = "classid", schoolno = "id2",
+                 sleepdifficulty = "sleepdificulty",
+                 famcar = "fasfamcar", bedroom = "fasbedroom",
+                 holidays = "fasholidays", computers = "fascomputers")
+
+# 2014 household items are tick boxes; all eight are needed for the recode
+household_2014 <- c("motherhome1", "fatherhome1", "stepmohome1", "stepfahome1",
+                    "grandmohome1", "grandfahome1", "fosterhome1", "elsehome1")
+
+
+
+#######Reading each wave, 2014 dataset formatted differently #######
+read_wave <- function(path, vars) {
+  pattern <- paste0("^(", paste(vars, collapse = "|"), ")$")   # match names, any case
+  first_line <- readLines(path, n = 1)
+  if (grepl(";", first_line)) {
+    read_delim(path, delim = ";",
+               locale = locale(decimal_mark = ","),
+               na = c("", " ", "."), trim_ws = TRUE,
+               col_select = matches(pattern, ignore.case = TRUE),
+               guess_max = Inf, show_col_types = FALSE)
+  } else {
+    read_csv(path, na = c("", " ", "."),
+             col_select = matches(pattern, ignore.case = TRUE),
+             guess_max = Inf, show_col_types = FALSE)
+  }
+}
+
+vars_2014 <- unique(c(setdiff(keep, names(rename_2014)), rename_2014, household_2014))
+
+waves <- imap(files, ~ read_wave(.x, if (.y == "2014") vars_2014 else keep)) |>
+  map(~ rename_with(.x, tolower))           # COUNTRYno -> countryno, AGECAT -> agecat
+
+
+#Reduce dataset to Norway Only
+wavesNorway <- map(waves, ~ filter(.x, countryno == 578000))
+rm(waves)
+
+#Recode 2014 TickBoxes
+# household tick boxes (1 = ticked, blank = not ticked) -> 1 = yes, 2 = no;
+# if no box at all was ticked, treat the question as unanswered (NA)
+wavesNorway[["2014"]] <- wavesNorway[["2014"]] |>
+  rename(all_of(rename_2014)) |>
+  mutate(answered_household = if_any(all_of(household_2014), ~ !is.na(.x)),
+         across(all_of(household_2014),
+                ~ case_when(.x == 1 ~ 1,
+                            answered_household ~ 2,
+                            TRUE ~ NA_real_)))
+
+# keep the same variables, in the same order, as numbers, in every wave
+missing_vars <- map(wavesNorway, ~ setdiff(keep, names(.x)))
+if (any(lengths(missing_vars) > 0)) {
+  print(missing_vars[lengths(missing_vars) > 0])
+  stop("Some variables in 'keep' are missing from a wave (listed above).")
+}
+
+wavesNorway <- map(wavesNorway, ~ .x |>
+                     select(all_of(keep)) |>
+                     mutate(across(everything(), as.numeric)))
+
+
+#Stack Waves:
+FinalNorwayDataset <- bind_rows(wavesNorway, .id = "wave") |>
+  mutate(
+    wave = as.integer(wave),
+    # IDs are only unique within a wave, and in 2010 class numbers repeat
+    # across schools, so must build IDs from school_ID, Class_ID and Wave
+    school_id = paste(wave, schoolno, sep = "_"),
+    class_id  = paste(wave, schoolno, classno, sep = "_"),
+    #sibling counts: negative or non-whole values are errors
+    # (the 2014 international file has a few -1 and 0.5; none in Norway)
+    across(c(brothershome1, sistershome1),
+           ~ ifelse(.x < 0 | .x != round(.x), NA, .x))
+  )
+
+rm(wavesNorway)
+
+View(FinalNorwayDataset)
+
+#How many missing entries (N/A) do we have?
+colSums(is.na(FinalNorwayDataset))
+
+#############HADNLING MISSING DATA######################
+
+######Building Analysis Variables###############
+
+#The Mental Health Outcome Variable 
+#Index of key mental health indicators (MHI)
+mhi <- c("feellow", "irritable", "nervous", "sleepdifficulty")
+#Will reverse the items (Higher number = More symptoms)
+
+FinalNorwayDataset <- FinalNorwayDataset |>
+  mutate(across(all_of(mhi), ~ 6 - .x, .names = "{.col}_r"))
+
+#Will Include Index weights -> Can pick and justify later
+mhiWeights <- c(feellow = 1, irritable = 1, nervous = 1, sleepdifficulty = 1)
+
+#Produce Weighted average of the reversed items
+mhi_r <- paste0(mhi, "_r")
+w <- mhiWeights[mhi] / sum(mhiWeights)
+FinalNorwayDataset$mhi <- as.vector(as.matrix(FinalNorwayDataset[mhi_r]) %*% w)
+View(FinalNorwayDataset)
+
+
+
+
+########Build Treatment Variables#######
+
+#Own Sex Variable: Needed for interaction term
+FinalNorwayDataset <- FinalNorwayDataset |> mutate(girl = as.integer(sex == 2)) #If boy = 0, if girl = 1s
+
+# Sibling gender
+FinalNorwayDataset <- FinalNorwayDataset |>
+  mutate(
+    nbrothers = brothershome1,                        # treatment: number of brothers
+    #Given we will control for family size, this variable asks: Given family size is the same size, what is the effect of one of those siblings 
+    #being a brother. 
+    nsibs     = brothershome1 + sistershome1,         # family size
+    nsibs_cat = factor(ifelse(nsibs >= 4, "4+", nsibs),
+                       levels = c("0", "1", "2", "3", "4+"))   # family-size dummies
+  )
+
+
+# Class composition --> Uses Class Id, to find sex of all children in same class
+FinalNorwayDataset <- FinalNorwayDataset |>
+  group_by(class_id) |>
+  mutate(
+    class_n         = n(),                                     # respondents in the class
+    share_girls_loo = (sum(girl) - girl) / (class_n - 1)       # leave-one-out share of girls
+  ) |>
+  ungroup() |>
+  mutate(share_girls_100 = share_girls_loo * 100)                # Rescales share of girls: unit change = +1pp increase in girls
+
+
+View(FinalNorwayDataset)
+
+#####Control Variables######
+#Parent Occupation is categorical --> Need to adjust so enters regression as dummy variables
+# 1-5 = SES 1 (high) to 5 (low); 6 = job, not classified; 7 = not in work;
+#           8 = looking for job; 9 = home working; 10 = don't know;
+#           11 = don't have or see this parent; 12 = not classifiable
+group_occ <- function(x) {
+  factor(case_when(x %in% 1:5      ~ paste0("SES", x),
+                   x %in% c(6, 12) ~ "job, not classified",
+                   x %in% 7:9      ~ "not in paid work",
+                   x == 10         ~ "don't know",
+                   x == 11         ~ "no parent"),
+         levels = c("SES1", "SES2", "SES3", "SES4", "SES5", "job, not classified",
+                    "not in paid work", "don't know", "no parent"))
+}
+
+FinalNorwayDataset <- FinalNorwayDataset |>
+  mutate(occ_fa = group_occ(occupsesfa),
+         occ_mo = group_occ(occupsesmo))
+
+
+View(FinalNorwayDataset)
+
+
+
+#########Assessing if Treatments are as good as random#########
+
+
+library(fixest)
+
+#Restrict the sample to classes with more than 10 students
+analysis <- FinalNorwayDataset |>
+  filter(class_n >= 10, !is.na(agecat))
+
+#Restrict to those who have a sibling
+sibSample <- analysis |> filter(nsibs > 0)
+
+#Sibling Genders
+# Is the share of brothers close to 51.2% (the sex ratio at birth)?
+shareBrothers <- sibSample |>
+  group_by(agecat) |>
+  summarise(siblings       = sum(nsibs),
+            brothers       = sum(nbrothers),
+            share_brothers = brothers / siblings,
+            pValue         = binom.test(brothers, siblings, p = 0.512)$p.value)
+
+
+# Partial correlations: number of brothers vs each characteristic,
+# Holding family size and wave fixed, by age group
+balance_vars <- c("girl", "age", "famcar", "holidays", "computers")
+
+cor_table <- sapply(1:3, function(g) {
+  d <- filter(sibSample, agecat == g)
+  # part of nbrothers not explained by family size and wave
+  d$brothers_resid <- resid(lm(nbrothers ~ nsibs_cat + factor(wave), data = d, na.action = na.exclude))
+  sapply(balance_vars, function(v) cor(d$brothers_resid, d[[v]], use = "complete.obs"))
+})
+colnames(cor_table) <- c("Age 11", "Age 13", "Age 15")
+round(cor_table, 3)
+
+
+#Class Composition
+#Shuffle children around classes and observe the differences in the spread
+
+spreadCheck <- function(data, reps = 500) {
+  # real spread: SD of the share of girls across classes
+  realSD <- data |> group_by(class_id) |> summarise(share = mean(girl)) |> pull(share) |> sd()
+  # random spread: shuffle sex across classes (within wave), same class sizes
+  simSD <- replicate(reps, {
+    data |>
+      group_by(wave) |> mutate(girl_sim = sample(girl)) |>
+      group_by(class_id) |> summarise(share = mean(girl_sim)) |> pull(share) |> sd()
+  })
+  c(realSD = realSD, randomSD = mean(simSD), p_value = mean(simSD >= realSD))
+}
+
+spread <- sapply(1:3, function(g) spreadCheck(filter(analysis, agecat == g)))
+colnames(spread) <- c("Age 11", "Age 13", "Age 15")
+round(spread, 3)
+
+#RESULT --> age group 15 has class compositions that we cannot trust to be random
+
+#########MAIN OLS TEST###########
+
+#Main sample: ages 11 and 13 only (class composition not random at age 15)
+mainSample <- analysis |> filter(agecat %in% c(1, 2))
+
+mainSample |> group_by(girl) |> summarise(mean_mhi = mean(mhi, na.rm = TRUE), sd_mhi = sd(mhi, na.rm = TRUE), n = sum(!is.na(mhi)))
+
+#Mental health index (1-5, higher = more symptoms)
+m_mhi <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +
+                 age + famcar + holidays + computers + occ_fa + occ_mo |
+                 nsibs_cat + wave + agecat,
+               data = mainSample, cluster = ~class_id)
+#NOTE: The difference in reporting. The equation reports a baseline + difference:
+        #β₁ = effect of a brother for boys
+        #β₂ = how much the effect differs for girls, so girls’ effect = β₁ + β₂
+        #Code reports each group’s effect directly:
+        #nbrothers:factor(girl)0 = effect for boys = β₁
+        #nbrothers:factor(girl)1 = effect for girls = β₁ + β₂
+
+
+etable(m_mhi,keep = c("nbrothers", "share_girls", "girl"), digits = 4)
+
+
+#Producing Key Tables
+####Descriptive Statistics from Final Sample#####
+library(knitr)
+#########Table 1: Descriptive statistics (main sample)#########
+descVars <- c(
+  "Mental health index (1-5, higher = more symptoms)" = "mhi",
+  "Life satisfaction (0-10)"                          = "lifesat",
+  "Girl"                                              = "girl",
+  "Age (years)"                                       = "age",
+  "Number of brothers at home"                        = "nbrothers",
+  "Number of siblings at home"                        = "nsibs",
+  "Share of girls among classmates (%)"               = "share_girls_100",
+  "Family cars (1-3)"                                 = "famcar",
+  "Family holidays (1-4)"                             = "holidays",
+  "Family computers (1-4)"                            = "computers",
+  "Respondents per class"                             = "class_n")
+stat <- function(f) sapply(descVars, function(v) f(mainSample[[v]]))
+
+table1 <- tibble(
+  Variable     = names(descVars),
+  Mean         = stat(function(x) mean(x, na.rm = TRUE)),
+  SD           = stat(function(x) sd(x, na.rm = TRUE)),
+  `Mean boys`  = sapply(descVars, function(v) mean(mainSample[[v]][mainSample$girl == 0], na.rm = TRUE)),
+  `Mean girls` = sapply(descVars, function(v) mean(mainSample[[v]][mainSample$girl == 1], na.rm = TRUE)),
+  N            = stat(function(x) sum(!is.na(x))))
+
+table1 <- mutate(table1, across(where(is.numeric), function(x) round(x, 2)))
+print(table1, n = Inf, width = Inf)
+
+
+####Tables from Balance Tests#######
+
+#Table A: share of brothers vs sex ratio at birth
+tableA <- shareBrothers |>
+  transmute(`Age group`             = c("11", "13", "15")[agecat],
+            `Siblings`              = format(siblings, big.mark = ","),
+            `Brothers`              = format(brothers, big.mark = ","),
+            `Share of brothers (%)` = sprintf("%.1f", 100 * share_brothers),
+            `p-value (H0: 51.2%)`   = sprintf("%.2f", pValue))
+
+#Table B: partial correlations with number of brothers
+var_labels <- c(girl = "Girl", age = "Age (years)", famcar = "Family cars",
+                holidays = "Family holidays", computers = "Family computers")
+tableB <- data.frame(Characteristic = var_labels[rownames(cor_table)],
+                     round(cor_table, 3), check.names = FALSE, row.names = NULL)
+
+#Table C: spread of class gender composition vs random allocation
+tableC <- data.frame(Statistic = c("Observed SD of class share of girls",
+                                   "Mean SD under random allocation (500 shuffles)",
+                                   "p-value (share of shuffles at least as spread out)"),
+                     round(spread, 3), check.names = FALSE, row.names = NULL)
+
+
+#Print neatly in the console
+kable(tableA, align = "lrrrr")
+kable(tableB, align = "lrrr")
+kable(tableC, align = "lrrr")
+
+
+
+######MAIN OLS TABLE######
+#Do both with and without controls
+#########Table 3: Main results#########
+#Columns: Mental health index without / with controls
+
+#Same students in both columns: keep only those with complete controls
+mainSample <- mainSample |>
+  filter(if_all(c(age, famcar, holidays, computers), ~ !is.na(.x)))
+
+m1 <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl |       #Has no Controls
+              nsibs_cat + wave + agecat,
+            data = mainSample, cluster = ~class_id)
+
+m2 <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +       #Has Controls
+              age + famcar + holidays + computers + occ_fa + occ_mo |
+              nsibs_cat + wave + agecat,
+            data = mainSample, cluster = ~class_id)
+
+etable(m1, m2,
+       keep       = c("nbrothers", "share_girls", "girl"),
+       headers    = c("No controls", "With controls"),
+       extralines = list("Controls" = c("No", "Yes")),
+       digits     = 4)

@@ -4,11 +4,10 @@ library(readr)
 library(dplyr)
 library(purrr)
 
-files <- c("2002" = "data/HBSC2001OAed1.0_F4.csv",
-           "2006" = "data/HBSC2006OAed1.0_F1.csv",
-           "2010" = "data/HBSC2010OAed1.0_F4.csv",
-           "2014" = "data/HBSC2014OAed2.0.csv")
-
+files <- c("2002" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2001OAed1.0_F4.csv",
+           "2006" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2006OAed1.0_F1.csv",
+           "2010" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2010OAed1.0_F4.csv",
+           "2014" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2014OAed2.0.csv")
 
 ############Narrowing DataSet to include the variables we want######### 
 
@@ -107,7 +106,84 @@ View(FinalNorwayDataset)
 #How many missing entries (N/A) do we have?
 colSums(is.na(FinalNorwayDataset))
 
-#############HADNLING MISSING DATA######################
+#############HANDLING MISSING DATA######################
+
+#Percentage of missing values
+colMeans(is.na(FinalNorwayDataset))*100
+dim(FinalNorwayDataset)
+
+#Consider Removing Rows
+library(tidyr)
+
+FinalNorwayDatasetfullrows <- FinalNorwayDataset |> 
+  drop_na(mhi, nbrothers, share_girls_100, age, famcar, 
+          holidays, computers, occ_fa, occ_mo)
+
+dim(FinalNorwayDatasetfullrows) 
+
+lm_listwise <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
+                       age + famcar + holidays + computers + occ_fa + occ_mo | 
+                       nsibs_cat + wave + agecat, 
+                     data = FinalNorwayDatasetfullrows, 
+                     cluster = ~class_id)
+
+
+#Consider Mean Imputation
+FinalNorwayDatasetimputed <- FinalNorwayDataset
+numeric_controls <- c("famcar", "holidays", "computers", "age")
+
+for(col in numeric_controls) {
+  if(is.numeric(FinalNorwayDatasetimputed[[col]])) {
+    FinalNorwayDatasetimputed[[col]][is.na(FinalNorwayDatasetimputed[[col]])] <- 
+      mean(FinalNorwayDatasetimputed[[col]], na.rm = TRUE)
+  }
+}
+
+lm_mean_imp <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
+                       age + famcar + holidays + computers + occ_fa + occ_mo | 
+                       nsibs_cat + wave + agecat, 
+                     data = FinalNorwayDatasetimputed, 
+                     cluster = ~class_id)
+
+sum(is.na(FinalNorwayDatasetimputed))
+colSums(is.na(FinalNorwayDatasetimputed))
+
+library(ggplot2)
+ggplot(FinalNorwayDataset, aes(x=brothershome1, fill="Original")) +
+  geom_density(alpha=0.5) +
+  geom_density(data=FinalNorwayDatasetimputed, aes(x=brothershome1, fill="Imputed"), alpha=0.5) +
+  labs(title="Density Plot of Norway: Original vs. Imputed")
+
+
+#Consider MICE
+install.packages(c("mice", "ggplot2", "naniar"))
+library(mice)
+
+Dataset_for_MICE <- FinalNorwayDataset |> 
+  drop_na(mhi, nbrothers, share_girls_100)
+
+imp_data <- Dataset_for_MICE |> 
+  select(class_id, mhi, nbrothers, share_girls_100, girl, age, famcar, 
+         holidays, computers, occ_fa, occ_mo, nsibs_cat, wave, agecat)
+
+set.seed(12345)
+cat("Running MICE imputation... (This might take a minute)\n")
+imputed_datasets <- mice(imp_data, m = 5, method = "pmm", printFlag = FALSE)
+
+FinalNorwayDataset_MICE <- complete(imputed_datasets, 1)
+
+lm_mice <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
+                   age + famcar + holidays + computers + occ_fa + occ_mo | 
+                   nsibs_cat + wave + agecat, 
+                 data = FinalNorwayDataset_MICE, 
+                 cluster = ~class_id)
+
+# Compare the methods side-by-side
+etable(lm_listwise, lm_mean_imp, lm_mice, 
+       keep = c("nbrothers", "share_girls", "girl"), 
+       headers = c("Listwise Deletion", "Mean Imputed", "MICE Imputed"),
+       extralines = list("Controls" = c("Yes", "Yes", "Yes")),
+       digits = 4)
 
 ######Building Analysis Variables###############
 

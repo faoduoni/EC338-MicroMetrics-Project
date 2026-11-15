@@ -9,7 +9,7 @@ files <- c("2002" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/
            "2010" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2010OAed1.0_F4.csv",
            "2014" = "C:/Users/BenRo/OneDrive/Documents/Warwick Economics/Year 3/MicroMetrics/Assignment/MicroMetrics Project/HBSC2014OAed2.0.csv")
 
-############Narrowing DataSet to include the variables we want######### 
+############Narrowing DataSet to include the variables we want##############
 
 keep <- c(
   # design / identifiers
@@ -19,11 +19,11 @@ keep <- c(
   "occupsesfa", "occupsesmo",                                          #Parental occupation
   "brothershome1", "sistershome1",                                     # Main Treatment
   "motherhome1", "fatherhome1", "stepmohome1", "stepfahome1",          #Family structure could be used for balance tests?
-  "feellow", "irritable", "nervous", "sleepdifficulty", "lifesat",     #Main OUTCOME variables --> Will build index from
+  "feellow", "irritable", "nervous", "sleepdifficulty", "lifesat",     #Main OUTCOME varaibles --> Will build index from
   "beenbullied", "studaccept", "talkmother", "talkfather"              #Other potential outcomes of treatments
 )
 
-# 2014 uses different names for some variables: new name = "2014 name"
+# 2014 uses different names for some variables: new name = 2014 name
 rename_2014 <- c(classno = "classid", schoolno = "id2",
                  sleepdifficulty = "sleepdificulty",
                  famcar = "fasfamcar", bedroom = "fasbedroom",
@@ -106,86 +106,8 @@ View(FinalNorwayDataset)
 #How many missing entries (N/A) do we have?
 colSums(is.na(FinalNorwayDataset))
 
-#############HANDLING MISSING DATA######################
 
-#Percentage of missing values
-colMeans(is.na(FinalNorwayDataset))*100
-dim(FinalNorwayDataset)
-
-#Consider Removing Rows
-library(tidyr)
-
-FinalNorwayDatasetfullrows <- FinalNorwayDataset |> 
-  drop_na(mhi, nbrothers, share_girls_100, age, famcar, 
-          holidays, computers, occ_fa, occ_mo)
-
-dim(FinalNorwayDatasetfullrows) 
-
-lm_listwise <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
-                       age + famcar + holidays + computers + occ_fa + occ_mo | 
-                       nsibs_cat + wave + agecat, 
-                     data = FinalNorwayDatasetfullrows, 
-                     cluster = ~class_id)
-
-
-#Consider Mean Imputation
-FinalNorwayDatasetimputed <- FinalNorwayDataset
-numeric_controls <- c("famcar", "holidays", "computers", "age")
-
-for(col in numeric_controls) {
-  if(is.numeric(FinalNorwayDatasetimputed[[col]])) {
-    FinalNorwayDatasetimputed[[col]][is.na(FinalNorwayDatasetimputed[[col]])] <- 
-      mean(FinalNorwayDatasetimputed[[col]], na.rm = TRUE)
-  }
-}
-
-lm_mean_imp <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
-                       age + famcar + holidays + computers + occ_fa + occ_mo | 
-                       nsibs_cat + wave + agecat, 
-                     data = FinalNorwayDatasetimputed, 
-                     cluster = ~class_id)
-
-sum(is.na(FinalNorwayDatasetimputed))
-colSums(is.na(FinalNorwayDatasetimputed))
-
-library(ggplot2)
-ggplot(FinalNorwayDataset, aes(x=brothershome1, fill="Original")) +
-  geom_density(alpha=0.5) +
-  geom_density(data=FinalNorwayDatasetimputed, aes(x=brothershome1, fill="Imputed"), alpha=0.5) +
-  labs(title="Density Plot of Norway: Original vs. Imputed")
-
-
-#Consider MICE
-install.packages(c("mice", "ggplot2", "naniar"))
-library(mice)
-
-Dataset_for_MICE <- FinalNorwayDataset |> 
-  drop_na(mhi, nbrothers, share_girls_100)
-
-imp_data <- Dataset_for_MICE |> 
-  select(class_id, mhi, nbrothers, share_girls_100, girl, age, famcar, 
-         holidays, computers, occ_fa, occ_mo, nsibs_cat, wave, agecat)
-
-set.seed(12345)
-cat("Running MICE imputation... (This might take a minute)\n")
-imputed_datasets <- mice(imp_data, m = 5, method = "pmm", printFlag = FALSE)
-
-FinalNorwayDataset_MICE <- complete(imputed_datasets, 1)
-
-lm_mice <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl + 
-                   age + famcar + holidays + computers + occ_fa + occ_mo | 
-                   nsibs_cat + wave + agecat, 
-                 data = FinalNorwayDataset_MICE, 
-                 cluster = ~class_id)
-
-# Compare the methods side-by-side
-etable(lm_listwise, lm_mean_imp, lm_mice, 
-       keep = c("nbrothers", "share_girls", "girl"), 
-       headers = c("Listwise Deletion", "Mean Imputed", "MICE Imputed"),
-       extralines = list("Controls" = c("Yes", "Yes", "Yes")),
-       digits = 4)
-
-######Building Analysis Variables###############
+######Building Analysis Variabls###############
 
 #The Mental Health Outcome Variable 
 #Index of key mental health indicators (MHI)
@@ -374,7 +296,7 @@ print(table1, n = Inf, width = Inf)
 ####Tables from Balance Tests#######
 
 #Table A: share of brothers vs sex ratio at birth
-tableA <- shareBrothers |>
+sharesofBrothsVSexRatio <- shareBrothers |>
   transmute(`Age group`             = c("11", "13", "15")[agecat],
             `Siblings`              = format(siblings, big.mark = ","),
             `Brothers`              = format(brothers, big.mark = ","),
@@ -384,20 +306,20 @@ tableA <- shareBrothers |>
 #Table B: partial correlations with number of brothers
 var_labels <- c(girl = "Girl", age = "Age (years)", famcar = "Family cars",
                 holidays = "Family holidays", computers = "Family computers")
-tableB <- data.frame(Characteristic = var_labels[rownames(cor_table)],
+partialCorrelations <- data.frame(Characteristic = var_labels[rownames(cor_table)],
                      round(cor_table, 3), check.names = FALSE, row.names = NULL)
 
 #Table C: spread of class gender composition vs random allocation
-tableC <- data.frame(Statistic = c("Observed SD of class share of girls",
+permutationsTest <- data.frame(Statistic = c("Observed SD of class share of girls",
                                    "Mean SD under random allocation (500 shuffles)",
                                    "p-value (share of shuffles at least as spread out)"),
                      round(spread, 3), check.names = FALSE, row.names = NULL)
 
 
 #Print neatly in the console
-kable(tableA, align = "lrrrr")
-kable(tableB, align = "lrrr")
-kable(tableC, align = "lrrr")
+kable(sharesofBrothsVSexRatio, align = "lrrrr")
+kable(partialCorrelations, align = "lrrr")
+kable(permutationsTest, align = "lrrr")
 
 
 
@@ -410,17 +332,77 @@ kable(tableC, align = "lrrr")
 mainSample <- mainSample |>
   filter(if_all(c(age, famcar, holidays, computers), ~ !is.na(.x)))
 
-m1 <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl |       #Has no Controls
+noControls <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl |       #Has no Controls
               nsibs_cat + wave + agecat,
             data = mainSample, cluster = ~class_id)
 
-m2 <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +       #Has Controls
+mainSpecification <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +       #Has Controls
               age + famcar + holidays + computers + occ_fa + occ_mo |
               nsibs_cat + wave + agecat,
             data = mainSample, cluster = ~class_id)
 
-etable(m1, m2,
+etable(noControls, mainSpecification,
        keep       = c("nbrothers", "share_girls", "girl"),
        headers    = c("No controls", "With controls"),
        extralines = list("Controls" = c("No", "Yes")),
        digits     = 4)
+
+
+
+######Robustness Check######
+#Main specification for comparison = m2 (estimated above)
+
+## Check 1: recoded sibling answers (blank next to an answered sibling question = 0)
+#Done here only, using NEW variables, so the main analysis keeps the original sibling data
+mainSample <- mainSample |>
+  mutate(brothers_r  = ifelse(is.na(brothershome1) & !is.na(sistershome1), 0, brothershome1),
+         sisters_r   = ifelse(is.na(sistershome1) & !is.na(brothershome1), 0, sistershome1),
+         nsibs_r     = brothers_r + sisters_r,
+         nsibs_cat_r = factor(ifelse(nsibs_r >= 4, "4+", nsibs_r),
+                              levels = c("0", "1", "2", "3", "4+")))
+
+m_recode <- feols(mhi ~ brothers_r:factor(girl) + share_girls_100:factor(girl) + girl +
+                    age + famcar + holidays + computers + occ_fa + occ_mo |
+                    nsibs_cat_r + wave + agecat,
+                  data = mainSample, cluster = ~class_id)
+
+etable(mainSpecification, m_recode, keep = c("brothers", "share_girls"),
+       headers = c("Main", "Recoded siblings"), digits = 4)
+
+
+## Check 2: probit for frequent symptoms (index >= 3 = symptoms about weekly or more)
+mainSample <- mainSample |> mutate(high_symptoms = as.integer(mhi >= 3))
+mean(mainSample$high_symptoms, na.rm = TRUE)   # share with frequent symptoms (about 0.18)
+
+probitModel <- feglm(high_symptoms ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +
+                    age + famcar + holidays + computers + occ_fa + occ_mo |
+                    nsibs_cat + wave + agecat,
+                  data = mainSample, family = binomial(link = "probit"), cluster = ~class_id)
+
+#Average marginal effects: coefficient x average normal density (boys and girls separately)
+xb    <- predict(probitModel, newdata = mainSample, type = "link")
+dens  <- c(boys  = mean(dnorm(xb[mainSample$girl == 0]), na.rm = TRUE),
+           girls = mean(dnorm(xb[mainSample$girl == 1]), na.rm = TRUE))
+ct    <- coeftable(probitModel)
+rows  <- grep("brothers|share_girls", rownames(ct))
+scale <- ifelse(grepl("girl\\)0", rownames(ct)[rows]), dens["boys"], dens["girls"])
+
+ame <- data.frame(term    = rownames(ct)[rows],
+                  AME     = round(ct[rows, 1] * scale, 4),
+                  SE      = round(ct[rows, 2] * scale, 4),
+                  p_value = round(ct[rows, 4], 4))
+ame
+
+
+## Check 3: stricter class-size cutoff (15+ respondents)
+stricterClassSize <- feols(mhi ~ nbrothers:factor(girl) + share_girls_100:factor(girl) + girl +
+                age + famcar + holidays + computers + occ_fa + occ_mo |
+                nsibs_cat + wave + agecat,
+              data = filter(mainSample, class_n >= 15), cluster = ~class_id)
+
+
+## All OLS checks side by side
+etable(mainSpecification, m_recode, stricterClassSize, keep = c("brothers", "share_girls"),
+       headers = c("Main", "Recoded siblings", "15+ respondents"), digits = 4)
+
+

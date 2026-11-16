@@ -240,13 +240,6 @@ round(spread, 3)
 
 #RESULT --> age group 15 has class compositions that we cannot trust to be random
 
-set.seed(123)   # Add this so Table 5 p-values are reproducible every run
-spread <- sapply(1:3, function(g) spreadCheck(filter(analysis, agecat == g)))
-colnames(spread) <- c("Age 11", "Age 13", "Age 15")
-round(spread, 3)
-
-#RESULT --> age group 15 has class compositions that we cannot trust to be random
-
 # Formal regression balance tests on the retained sample (Ages 11 and 13)
 bal_brothers <- feols(
   nbrothers ~ girl + age + famcar + holidays + computers + occ_fa + occ_mo |
